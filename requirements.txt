@@ -1,0 +1,4 @@
+# vinylstudio-to-jb7
+# No external dependencies required - uses Python stdlib (tkinter, shutil, os, etc.)
+# To package as a standalone app, optionally install:
+# pyinstaller
