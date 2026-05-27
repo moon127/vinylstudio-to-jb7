@@ -35,6 +35,8 @@ def sync_directories(
     pause_seconds: float,
     progress: SyncProgress,
     log_callback: callable,
+    dir_exists_callback: callable | None = None,
+    file_exists_callback: callable | None = None,
 ) -> bool:
     if not os.path.isdir(src):
         log_callback(f"ERROR: Source directory does not exist: {src}")
@@ -44,9 +46,10 @@ def sync_directories(
         log_callback(f"ERROR: Destination directory does not exist: {dst}")
         return False
 
-    target_base = resolve_target(src, dst)
-    os.makedirs(target_base, exist_ok=True)
+    target = resolve_target(src, dst)
+    os.makedirs(target, exist_ok=True)
 
+    skipped_dirs: set[str] = set()
     total_files = 0
     copied_files = 0
 
@@ -56,12 +59,24 @@ def sync_directories(
             return False
 
         rel_path = os.path.relpath(dirpath, src)
-        target_dir = os.path.join(target_base, rel_path) if rel_path != "." else target_base
+        target_dir = os.path.join(target, rel_path) if rel_path != "." else target
 
         for dirname in dirnames:
             if progress.cancelled:
                 return False
-            os.makedirs(os.path.join(target_dir, dirname), exist_ok=True)
+            dest_child = os.path.join(target_dir, dirname)
+            child_rel = os.path.relpath(os.path.join(dirpath, dirname), src)
+            if os.path.isdir(dest_child) and dir_exists_callback:
+                action = dir_exists_callback(child_rel)
+                if action == "skip":
+                    skipped_dirs.add(child_rel)
+                    log_callback(f"Skipping existing directory: {child_rel}")
+                    continue
+                elif action == "cancel":
+                    log_callback("Sync cancelled by user")
+                    progress.cancel()
+                    return False
+            os.makedirs(dest_child, exist_ok=True)
 
         for filename in filenames:
             if progress.cancelled:
@@ -70,13 +85,18 @@ def sync_directories(
 
     log_callback(f"Found {total_files} files to copy")
 
+    overwrite_all_dirs: set[str] = set()
+
     for dirpath, dirnames, filenames in os.walk(src):
         if progress.cancelled:
             log_callback("Sync cancelled by user")
             return False
 
         rel_path = os.path.relpath(dirpath, src)
-        target_dir = os.path.join(target_base, rel_path) if rel_path != "." else target_base
+        if rel_path in skipped_dirs or any(rel_path.startswith(s + os.sep) for s in skipped_dirs):
+            continue
+
+        target_dir = os.path.join(target, rel_path) if rel_path != "." else target
 
         for filename in sorted(filenames):
             if progress.cancelled:
@@ -86,10 +106,22 @@ def sync_directories(
             src_file = os.path.join(dirpath, filename)
             dst_file = os.path.join(target_dir, filename)
 
+            if os.path.exists(dst_file) and file_exists_callback and rel_path not in overwrite_all_dirs:
+                action = file_exists_callback(rel_path, filename)
+                if action == "skip":
+                    log_callback(f"[{copied_files + 1}/{total_files}] Skipped: {filename}")
+                    continue
+                elif action == "overwrite_all":
+                    overwrite_all_dirs.add(rel_path)
+                elif action == "cancel":
+                    log_callback("Sync cancelled by user")
+                    progress.cancel()
+                    return False
+
             try:
                 shutil.copy2(src_file, dst_file)
                 copied_files += 1
-                log_callback(f"[{copied_files}/{total_files}] Copied: {os.path.join(rel_path, filename) if rel_path != '.' else filename}")
+                log_callback(f"[{copied_files}/{total_files}] Copied: {filename}")
 
                 if pause_seconds > 0 and copied_files < total_files:
                     _sleep_with_cancel(pause_seconds, progress)
@@ -101,7 +133,7 @@ def sync_directories(
                 log_callback(f"ERROR copying {src_file}: {e}")
                 continue
 
-    log_callback(f"Sync complete: {copied_files} files copied to {target_base}")
+    log_callback(f"Sync complete: {copied_files} files copied to {target}")
     return True
 
 

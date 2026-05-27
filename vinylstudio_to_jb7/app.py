@@ -8,6 +8,36 @@ from .platform import IS_MAC, dot_clean_available, eject_volume, remove_metadata
 from .sync import SyncProgress, sync_directories
 
 
+class _OptionDialog(tk.Toplevel):
+    def __init__(self, parent, title, message, options):
+        super().__init__(parent)
+        self.title(title)
+        self.transient(parent)
+        self.grab_set()
+        self.result = None
+
+        ttk.Label(self, text=message, wraplength=420).pack(padx=20, pady=(15, 5))
+        btn_frame = ttk.Frame(self)
+        btn_frame.pack(pady=(5, 12))
+        for text, value in options:
+            ttk.Button(btn_frame, text=text, command=lambda v=value: self._done(v)).pack(side=tk.LEFT, padx=4)
+
+        self.protocol("WM_DELETE_WINDOW", lambda: self._done("cancel"))
+        self.update_idletasks()
+        pw = parent.winfo_width()
+        ph = parent.winfo_height()
+        px = parent.winfo_x()
+        py = parent.winfo_y()
+        w = self.winfo_width()
+        h = self.winfo_height()
+        self.geometry(f"+{px + (pw - w) // 2}+{py + (ph - h) // 2}")
+        self.wait_window()
+
+    def _done(self, value):
+        self.result = value
+        self.destroy()
+
+
 class App:
     def __init__(self):
         self.root = tk.Tk()
@@ -20,6 +50,9 @@ class App:
         self._eject_result: tuple[bool, str] | None = None
         self._log_queue: collections.deque = collections.deque()
         self._poll_log_queue()
+        self._dialog_event = threading.Event()
+        self._dialog_request: tuple | None = None
+        self._dialog_result: str | None = None
 
         self._build_ui()
         self._apply_platform_options()
@@ -66,7 +99,15 @@ class App:
             main, text="Clean macOS metadata (.DS_Store, ._ files) and run dot_clean on destination",
             variable=self.dot_clean_var
         )
-        self.dot_clean_cb.grid(row=row, column=0, columnspan=3, sticky=tk.W, pady=(0, 8))
+        self.dot_clean_cb.grid(row=row, column=0, columnspan=3, sticky=tk.W, pady=(0, 2))
+        row += 1
+
+        self.hardfi_var = tk.BooleanVar(value=False)
+        self.hardfi_cb = ttk.Checkbutton(
+            main, text="Output in JB7 hardfi format",
+            variable=self.hardfi_var,
+        )
+        self.hardfi_cb.grid(row=row, column=0, columnspan=3, sticky=tk.W, pady=(0, 2))
         row += 1
 
         btn_frame = ttk.Frame(main)
@@ -128,6 +169,51 @@ class App:
         self.log_text.delete("1.0", tk.END)
         self.log_text.configure(state=tk.DISABLED)
 
+    def _confirm_dir(self, dir_name: str) -> str:
+        self._dialog_request = ("dir", dir_name)
+        self._dialog_result = None
+        self._dialog_event.clear()
+        self.root.after(0, self._process_dialog)
+        self._dialog_event.wait()
+        self._dialog_request = None
+        return self._dialog_result
+
+    def _confirm_file(self, rel_path: str, filename: str) -> str:
+        self._dialog_request = ("file", rel_path, filename)
+        self._dialog_result = None
+        self._dialog_event.clear()
+        self.root.after(0, self._process_dialog)
+        self._dialog_event.wait()
+        self._dialog_request = None
+        return self._dialog_result
+
+    def _process_dialog(self):
+        req = self._dialog_request
+        if req is None:
+            return
+        if req[0] == "dir":
+            dir_name = req[1]
+            result = messagebox.askyesnocancel(
+                "Directory Exists",
+                f"Album directory '{dir_name}' already exists.\nOverwrite files in this album?",
+            )
+            if result is None:
+                self._dialog_result = "cancel"
+            elif result:
+                self._dialog_result = "overwrite"
+            else:
+                self._dialog_result = "skip"
+        elif req[0] == "file":
+            rel_path, filename = req[1], req[2]
+            dlg = _OptionDialog(
+                self.root,
+                "File Exists",
+                f"'{rel_path}/{filename}' already exists.\nWhat would you like to do?",
+                [("Skip", "skip"), ("Overwrite", "overwrite"), ("Overwrite All", "overwrite_all"), ("Cancel Sync", "cancel")],
+            )
+            self._dialog_result = dlg.result
+        self._dialog_event.set()
+
     def _set_ui_enabled(self, enabled: bool):
         state = tk.NORMAL if enabled else tk.DISABLED
         self.sync_btn.configure(state=state)
@@ -137,6 +223,7 @@ class App:
         self.eject_btn.configure(state=state)
         if IS_MAC:
             self.dot_clean_cb.configure(state=state)
+        self.hardfi_cb.configure(state=state)
         self.cancel_btn.configure(state=tk.DISABLED if enabled else tk.NORMAL)
 
     def _start_sync(self):
@@ -161,6 +248,8 @@ class App:
             messagebox.showerror("Error", "Pause must be a non-negative number")
             return
 
+        hardfi_dir = os.path.join(dst, "hardfi") if self.hardfi_var.get() else None
+
         self._log(f"Starting sync: {src} -> {dst}")
         self._log(f"Pause between files: {pause}s" if pause > 0 else "No pause between files")
         self._set_ui_enabled(False)
@@ -169,14 +258,22 @@ class App:
         self.sync_progress = SyncProgress()
         self.sync_thread = threading.Thread(
             target=self._sync_worker,
-            args=(src, dst, pause, self.sync_progress),
+            args=(src, dst, pause, self.sync_progress, hardfi_dir),
             daemon=True,
         )
         self.sync_thread.start()
         self.root.after(100, self._check_sync_done)
 
-    def _sync_worker(self, src: str, dst: str, pause: float, progress: SyncProgress):
-        success = sync_directories(src, dst, pause, progress, self._log)
+    def _sync_worker(self, src: str, dst: str, pause: float, progress: SyncProgress, hardfi_dir: str | None = None):
+        target = hardfi_dir or dst
+        if hardfi_dir:
+            os.makedirs(hardfi_dir, exist_ok=True)
+            self._log(f"Hardfi format enabled, output to: {hardfi_dir}")
+        success = sync_directories(
+            src, target, pause, progress, self._log,
+            dir_exists_callback=self._confirm_dir,
+            file_exists_callback=self._confirm_file,
+        )
         if success and self.dot_clean_var.get() and IS_MAC:
             self._log("Removing macOS metadata files (.DS_Store, ._*, ...)...")
             count, errs = remove_metadata_files(dst)

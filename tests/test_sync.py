@@ -280,6 +280,217 @@ class TestSyncDirectories:
                 target = _flat_target(dst, src)
                 assert target in logs[-1]
 
+class TestSyncDirectoriesDirExistsCallback:
+    def test_called_when_dir_exists(self):
+        with tempfile.TemporaryDirectory() as src:
+            with tempfile.TemporaryDirectory() as dst:
+                album = os.path.join(src, "MyAlbum")
+                os.makedirs(album)
+                with open(os.path.join(album, "t.mp3"), "w") as f:
+                    f.write("x")
+                os.makedirs(os.path.join(dst, "MyAlbum"))
+
+                calls = []
+                def cb(name):
+                    calls.append(name)
+                    return "overwrite"
+
+                logs = []
+                p = SyncProgress()
+                sync_directories(src, dst, 0, p, logs.append, dir_exists_callback=cb)
+                assert calls == ["MyAlbum"]
+
+    def test_skip_dir(self):
+        with tempfile.TemporaryDirectory() as src:
+            with tempfile.TemporaryDirectory() as dst:
+                a1 = os.path.join(src, "Album1")
+                a2 = os.path.join(src, "Album2")
+                os.makedirs(a1)
+                os.makedirs(a2)
+                with open(os.path.join(a1, "a.mp3"), "w") as f:
+                    f.write("x")
+                with open(os.path.join(a2, "b.mp3"), "w") as f:
+                    f.write("x")
+                os.makedirs(os.path.join(dst, "Album1"))
+                os.makedirs(os.path.join(dst, "Album2"))
+
+                def cb(name):
+                    return "overwrite" if name == "Album1" else "skip"
+
+                logs = []
+                p = SyncProgress()
+                sync_directories(src, dst, 0, p, logs.append, dir_exists_callback=cb)
+                assert os.path.exists(os.path.join(dst, "Album1", "a.mp3"))
+                assert not os.path.exists(os.path.join(dst, "Album2", "b.mp3"))
+
+    def test_cancel_returns_false(self):
+        with tempfile.TemporaryDirectory() as src:
+            with tempfile.TemporaryDirectory() as dst:
+                album = os.path.join(src, "Album")
+                os.makedirs(album)
+                with open(os.path.join(album, "t.mp3"), "w") as f:
+                    f.write("x")
+                os.makedirs(os.path.join(dst, "Album"))
+
+                calls = []
+                def cb(name):
+                    calls.append(name)
+                    return "cancel"
+
+                logs = []
+                p = SyncProgress()
+                result = sync_directories(src, dst, 0, p, logs.append, dir_exists_callback=cb)
+                assert result is False
+                assert not os.path.exists(os.path.join(dst, "Album", "t.mp3"))
+
+    def test_skip_logged(self):
+        with tempfile.TemporaryDirectory() as src:
+            with tempfile.TemporaryDirectory() as dst:
+                album = os.path.join(src, "Album")
+                os.makedirs(album)
+                with open(os.path.join(album, "t.mp3"), "w") as f:
+                    f.write("x")
+                os.makedirs(os.path.join(dst, "Album"))
+
+                logs = []
+                p = SyncProgress()
+                sync_directories(src, dst, 0, p, logs.append, dir_exists_callback=lambda n: "skip")
+                assert any("Skipping" in l for l in logs)
+
+
+class TestSyncDirectoriesFileExistsCallback:
+    def test_called_when_file_exists(self):
+        with tempfile.TemporaryDirectory() as src:
+            with tempfile.TemporaryDirectory() as dst:
+                album = os.path.join(src, "Album")
+                os.makedirs(album)
+                with open(os.path.join(album, "f.txt"), "w") as f:
+                    f.write("new")
+                os.makedirs(os.path.join(dst, "Album"))
+                with open(os.path.join(dst, "Album", "f.txt"), "w") as f:
+                    f.write("old")
+
+                calls = []
+                def cb(path, name):
+                    calls.append((path, name))
+                    return "overwrite"
+
+                logs = []
+                p = SyncProgress()
+                sync_directories(src, dst, 0, p, logs.append, file_exists_callback=cb)
+                assert calls == [("Album", "f.txt")]
+
+    def _nested_src(self, src):
+        album = os.path.join(src, "Album")
+        os.makedirs(album)
+        return album
+
+    def test_skip_file(self):
+        with tempfile.TemporaryDirectory() as src:
+            album = self._nested_src(src)
+            with tempfile.TemporaryDirectory() as dst:
+                os.makedirs(os.path.join(dst, "Album"))
+                with open(os.path.join(album, "f.txt"), "w") as f:
+                    f.write("new")
+                with open(os.path.join(dst, "Album", "f.txt"), "w") as f:
+                    f.write("old")
+
+                logs = []
+                p = SyncProgress()
+                sync_directories(src, dst, 0, p, logs.append, file_exists_callback=lambda p, n: "skip")
+                with open(os.path.join(dst, "Album", "f.txt")) as f:
+                    assert f.read() == "old"
+
+    def test_overwrite_file(self):
+        with tempfile.TemporaryDirectory() as src:
+            album = self._nested_src(src)
+            with tempfile.TemporaryDirectory() as dst:
+                os.makedirs(os.path.join(dst, "Album"))
+                with open(os.path.join(album, "f.txt"), "w") as f:
+                    f.write("new")
+                with open(os.path.join(dst, "Album", "f.txt"), "w") as f:
+                    f.write("old")
+
+                logs = []
+                p = SyncProgress()
+                sync_directories(src, dst, 0, p, logs.append, file_exists_callback=lambda p, n: "overwrite")
+                with open(os.path.join(dst, "Album", "f.txt")) as f:
+                    assert f.read() == "new"
+
+    def test_overwrite_all(self):
+        with tempfile.TemporaryDirectory() as src:
+            album = self._nested_src(src)
+            with tempfile.TemporaryDirectory() as dst:
+                os.makedirs(os.path.join(dst, "Album"))
+                for fname in ["a.txt", "b.txt", "c.txt"]:
+                    with open(os.path.join(album, fname), "w") as f:
+                        f.write("new")
+                    with open(os.path.join(dst, "Album", fname), "w") as f:
+                        f.write("old")
+
+                call_count = 0
+                def cb(path, name):
+                    nonlocal call_count
+                    call_count += 1
+                    return "overwrite_all"
+
+                logs = []
+                p = SyncProgress()
+                sync_directories(src, dst, 0, p, logs.append, file_exists_callback=cb)
+                assert call_count == 1
+                for fname in ["a.txt", "b.txt", "c.txt"]:
+                    with open(os.path.join(dst, "Album", fname)) as f:
+                        assert f.read() == "new"
+
+    def test_cancel_returns_false(self):
+        with tempfile.TemporaryDirectory() as src:
+            album = self._nested_src(src)
+            with tempfile.TemporaryDirectory() as dst:
+                os.makedirs(os.path.join(dst, "Album"))
+                with open(os.path.join(album, "f.txt"), "w") as f:
+                    f.write("new")
+                with open(os.path.join(dst, "Album", "f.txt"), "w") as f:
+                    f.write("old")
+
+                logs = []
+                p = SyncProgress()
+                result = sync_directories(src, dst, 0, p, logs.append, file_exists_callback=lambda p, n: "cancel")
+                assert result is False
+
+    def test_no_callback_when_file_does_not_exist(self):
+        with tempfile.TemporaryDirectory() as src:
+            album = self._nested_src(src)
+            with tempfile.TemporaryDirectory() as dst:
+                os.makedirs(os.path.join(dst, "Album"))
+                with open(os.path.join(album, "new.txt"), "w") as f:
+                    f.write("x")
+
+                called = False
+                def cb(path, name):
+                    nonlocal called
+                    called = True
+                    return "overwrite"
+
+                logs = []
+                p = SyncProgress()
+                sync_directories(src, dst, 0, p, logs.append, file_exists_callback=cb)
+                assert not called
+
+    def test_skip_logged(self):
+        with tempfile.TemporaryDirectory() as src:
+            album = self._nested_src(src)
+            with tempfile.TemporaryDirectory() as dst:
+                os.makedirs(os.path.join(dst, "Album"))
+                with open(os.path.join(album, "f.txt"), "w") as f:
+                    f.write("new")
+                with open(os.path.join(dst, "Album", "f.txt"), "w") as f:
+                    f.write("old")
+
+                logs = []
+                p = SyncProgress()
+                sync_directories(src, dst, 0, p, logs.append, file_exists_callback=lambda p, n: "skip")
+                assert any("Skipped" in l for l in logs)
+
 
 class TestSleepWithCancel:
     def test_sleep_completes(self):

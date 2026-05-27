@@ -4,7 +4,7 @@ import tkinter as tk
 
 import pytest
 
-from vinylstudio_to_jb7.app import App
+from vinylstudio_to_jb7.app import App, _OptionDialog
 from vinylstudio_to_jb7.platform import IS_MAC
 
 
@@ -27,6 +27,8 @@ class TestAppInit:
     def test_dot_clean_default_on_mac(self, app):
         assert app.dot_clean_var.get() is True
 
+    def test_hardfi_default_off(self, app):
+        assert app.hardfi_var.get() is False
 
 class TestApplyPlatformOptions:
     def test_dot_clean_disabled_on_non_mac(self, monkeypatch):
@@ -66,6 +68,168 @@ class TestLog:
         content = app.log_text.get("1.0", tk.END).strip()
         app.log_text.configure(state=tk.DISABLED)
         assert content == ""
+
+
+class TestProcessDialog:
+    def test_none_request_does_nothing(self, app):
+        app._dialog_request = None
+        app._dialog_event.clear()
+        app._process_dialog()
+        assert not app._dialog_event.is_set()
+
+    def test_dir_overwrite(self, app, monkeypatch):
+        monkeypatch.setattr(
+            "vinylstudio_to_jb7.app.messagebox.askyesnocancel",
+            lambda t, m: True,
+        )
+        app._dialog_request = ("dir", "MyAlbum")
+        app._dialog_event.clear()
+        app._process_dialog()
+        assert app._dialog_result == "overwrite"
+        assert app._dialog_event.is_set()
+
+    def test_dir_skip(self, app, monkeypatch):
+        monkeypatch.setattr(
+            "vinylstudio_to_jb7.app.messagebox.askyesnocancel",
+            lambda t, m: False,
+        )
+        app._dialog_request = ("dir", "MyAlbum")
+        app._dialog_event.clear()
+        app._process_dialog()
+        assert app._dialog_result == "skip"
+        assert app._dialog_event.is_set()
+
+    def test_dir_cancel(self, app, monkeypatch):
+        monkeypatch.setattr(
+            "vinylstudio_to_jb7.app.messagebox.askyesnocancel",
+            lambda t, m: None,
+        )
+        app._dialog_request = ("dir", "MyAlbum")
+        app._dialog_event.clear()
+        app._process_dialog()
+        assert app._dialog_result == "cancel"
+        assert app._dialog_event.is_set()
+
+    def test_file_skip(self, app, monkeypatch):
+        monkeypatch.setattr(
+            "vinylstudio_to_jb7.app._OptionDialog",
+            lambda parent, title, message, options: type('D', (), {'result': 'skip'})(),
+        )
+        app._dialog_request = ("file", "Album", "t.mp3")
+        app._dialog_event.clear()
+        app._process_dialog()
+        assert app._dialog_result == "skip"
+        assert app._dialog_event.is_set()
+
+    def test_file_overwrite(self, app, monkeypatch):
+        monkeypatch.setattr(
+            "vinylstudio_to_jb7.app._OptionDialog",
+            lambda parent, title, message, options: type('D', (), {'result': 'overwrite'})(),
+        )
+        app._dialog_request = ("file", "Album", "t.mp3")
+        app._dialog_event.clear()
+        app._process_dialog()
+        assert app._dialog_result == "overwrite"
+        assert app._dialog_event.is_set()
+
+    def test_file_overwrite_all(self, app, monkeypatch):
+        monkeypatch.setattr(
+            "vinylstudio_to_jb7.app._OptionDialog",
+            lambda parent, title, message, options: type('D', (), {'result': 'overwrite_all'})(),
+        )
+        app._dialog_request = ("file", "Album", "t.mp3")
+        app._dialog_event.clear()
+        app._process_dialog()
+        assert app._dialog_result == "overwrite_all"
+        assert app._dialog_event.is_set()
+
+    def test_file_cancel(self, app, monkeypatch):
+        monkeypatch.setattr(
+            "vinylstudio_to_jb7.app._OptionDialog",
+            lambda parent, title, message, options: type('D', (), {'result': 'cancel'})(),
+        )
+        app._dialog_request = ("file", "Album", "t.mp3")
+        app._dialog_event.clear()
+        app._process_dialog()
+        assert app._dialog_result == "cancel"
+        assert app._dialog_event.is_set()
+
+
+class TestOptionDialog:
+    def test_done_sets_result(self):
+        dlg = _OptionDialog.__new__(_OptionDialog)
+        dlg.result = None
+        destroyed = []
+        dlg.destroy = lambda: destroyed.append(True)
+        dlg._done("test_value")
+        assert dlg.result == "test_value"
+        assert destroyed == [True]
+
+    def test_constructor_creates_widgets(self, app, monkeypatch):
+        monkeypatch.setattr(_OptionDialog, "wait_window", lambda self: None)
+        dlg = _OptionDialog(app.root, "Title", "Message", [("Skip", "skip")])
+        assert dlg.title() == "Title"
+        assert dlg.result is None
+
+
+class TestConfirmDir:
+    def test_overwrite(self, app, monkeypatch):
+        monkeypatch.setattr(
+            "vinylstudio_to_jb7.app.messagebox.askyesnocancel",
+            lambda t, m: True,
+        )
+        monkeypatch.setattr(app.root, "after", lambda ms, fn, *a: fn(*a))
+        assert app._confirm_dir("Album") == "overwrite"
+
+    def test_skip(self, app, monkeypatch):
+        monkeypatch.setattr(
+            "vinylstudio_to_jb7.app.messagebox.askyesnocancel",
+            lambda t, m: False,
+        )
+        monkeypatch.setattr(app.root, "after", lambda ms, fn, *a: fn(*a))
+        assert app._confirm_dir("Album") == "skip"
+
+    def test_cancel(self, app, monkeypatch):
+        monkeypatch.setattr(
+            "vinylstudio_to_jb7.app.messagebox.askyesnocancel",
+            lambda t, m: None,
+        )
+        monkeypatch.setattr(app.root, "after", lambda ms, fn, *a: fn(*a))
+        assert app._confirm_dir("Album") == "cancel"
+
+
+class TestConfirmFile:
+    def test_overwrite(self, app, monkeypatch):
+        monkeypatch.setattr(
+            "vinylstudio_to_jb7.app._OptionDialog",
+            lambda parent, title, message, options: type('D', (), {'result': 'overwrite'})(),
+        )
+        monkeypatch.setattr(app.root, "after", lambda ms, fn, *a: fn(*a))
+        assert app._confirm_file("Album", "t.mp3") == "overwrite"
+
+    def test_overwrite_all(self, app, monkeypatch):
+        monkeypatch.setattr(
+            "vinylstudio_to_jb7.app._OptionDialog",
+            lambda parent, title, message, options: type('D', (), {'result': 'overwrite_all'})(),
+        )
+        monkeypatch.setattr(app.root, "after", lambda ms, fn, *a: fn(*a))
+        assert app._confirm_file("Album", "t.mp3") == "overwrite_all"
+
+    def test_skip(self, app, monkeypatch):
+        monkeypatch.setattr(
+            "vinylstudio_to_jb7.app._OptionDialog",
+            lambda parent, title, message, options: type('D', (), {'result': 'skip'})(),
+        )
+        monkeypatch.setattr(app.root, "after", lambda ms, fn, *a: fn(*a))
+        assert app._confirm_file("Album", "t.mp3") == "skip"
+
+    def test_cancel(self, app, monkeypatch):
+        monkeypatch.setattr(
+            "vinylstudio_to_jb7.app._OptionDialog",
+            lambda parent, title, message, options: type('D', (), {'result': 'cancel'})(),
+        )
+        monkeypatch.setattr(app.root, "after", lambda ms, fn, *a: fn(*a))
+        assert app._confirm_file("Album", "t.mp3") == "cancel"
 
 
 class TestSetUiEnabled:
@@ -143,7 +307,6 @@ class TestStartSync:
         assert app.sync_progress is not None
         app._cancel_sync()
         app.sync_thread.join(timeout=5)
-
 
 class TestCancelSync:
     def test_cancel_no_progress(self, app):
@@ -247,6 +410,27 @@ class TestSyncWorker:
 
         app._sync_worker(str(src), str(dst), 0, app.sync_progress)
         assert app._sync_result is True
+
+    def test_sync_worker_hardfi(self, app, tmp_path):
+        src = tmp_path / "src"
+        dst = tmp_path / "dst"
+        src.mkdir()
+        dst.mkdir()
+        album = src / "Artist   Album"
+        album.mkdir()
+        (album / "01 a.mp3").write_text("x")
+        (album / "02 b.mp3").write_text("x")
+
+        from vinylstudio_to_jb7.sync import SyncProgress
+
+        app.dot_clean_var.set(False)
+        app.sync_progress = SyncProgress()
+        hardfi_dir = os.path.join(str(dst), "hardfi")
+
+        app._sync_worker(str(src), str(dst), 0, app.sync_progress, hardfi_dir)
+        assert app._sync_result is True
+        assert os.path.exists(os.path.join(hardfi_dir, "Artist   Album", "01 a.mp3"))
+        assert os.path.exists(os.path.join(hardfi_dir, "Artist   Album", "02 b.mp3"))
 
 
 class TestCheckSyncDone:

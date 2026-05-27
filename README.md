@@ -17,6 +17,7 @@ This tool solves that by copying files **one at a time** with a **user-configura
 - **Smart source handling** — if the selected source contains only files, a subdirectory named after the source is created on the destination; if it already contains subdirectories, the folder structure is mirrored as-is
 - **macOS metadata cleanup** — removes `.DS_Store`, `._*`, `.localized`, and `Thumbs.db` files from the copied tree, then runs `dot_clean` to merge remaining Apple Double resource fork files
 - **Volume eject** — eject the destination volume from the UI (macOS: `diskutil`, Linux: `udisksctl`/`eject`, Windows: PowerShell)
+- **JB7 hardfi format** — optionally output files directly into `hardfi/` (source already contains `Artist   Album/01 track.mp3` subdirectories)
 - **Live log** — see each file being copied in real time
 - **Cancel** — safely abort an in-progress sync
 
@@ -108,9 +109,10 @@ Removes the virtual environment, cache files, and build artifacts.
    - **Nested source** (has subdirectories, e.g. your whole library): mirrors subdirectories directly into the destination
 2. **Destination Directory** — click Browse and select the root of your JB7 USB drive.
 3. **Pause between files** — set the delay in seconds (default 0.5). Increase for very slow USB sticks.
-4. **Clean macOS metadata** — checked by default on macOS. Removes `.DS_Store`, `._*`, `.localized`, `Thumbs.db` from the copied tree, then runs `dot_clean` to merge any remaining Apple Double files.
-5. Click **Sync** to begin. The log area shows progress for each file.
-6. Click **Cancel** at any time to stop the sync.
+4. **Output in JB7 hardfi format** — unticked by default. When enabled, files are copied into `destination/hardfi/` instead of `destination/`. The source is expected to already contain subdirectories named `Artist   Album` with numerically-prefixed track files (e.g. as exported by VinylStudio).
+5. **Clean macOS metadata** — checked by default on macOS. Removes `.DS_Store`, `._*`, `.localized`, `Thumbs.db` from the copied tree, then runs `dot_clean` to merge any remaining Apple Double files.
+6. Click **Sync** to begin. The log area shows progress for each file.
+7. Click **Cancel** at any time to stop the sync.
 7. Click **Eject Destination** to safely unmount/eject the destination volume when done.
 
 ## How It Works
@@ -118,8 +120,38 @@ Removes the virtual environment, cache files, and build artifacts.
 1. The application checks whether the source contains subdirectories to determine the sync strategy.
 2. It walks the source directory and counts all files.
 3. It copies each file using `shutil.copy2` (preserving metadata), sleeping for the configured pause between copies.
-4. On macOS, if the option is enabled, it removes metadata/cache files (`.DS_Store`, `._*`, etc.) and runs `dot_clean` to merge any remaining Apple Double resource fork files.
-5. Every file on the destination gets a slightly different creation timestamp, and the JB7 plays them in filename order.
+4. If **hardfi format** is enabled, files are copied into `destination/hardfi/` instead (mirroring the source structure, which should already contain `Artist   Album/01 track.mp3` subdirectories).
+5. On macOS, if the option is enabled, it removes metadata/cache files (`.DS_Store`, `._*`, etc.) and runs `dot_clean` to merge any remaining Apple Double resource fork files.
+6. Every file on the destination gets a slightly different creation timestamp, and the JB7 plays them in filename order.
+
+## JB7 Hardfi Format
+
+The Brennan JB7 internally uses a `hardfi` directory layout on the USB drive:
+
+```
+hardfi/
+  Artist_name   Album_name/
+    01 track1.mp3
+    02 track2.mp3
+    ...
+```
+
+Key details:
+- The top-level directory must be named `hardfi`.
+- The album directory name is `Artist_name   Album_name` — artist and album separated by **three spaces**.
+- Track files must be sorted alphanumerically by filename.
+
+When the **Output in JB7 hardfi format** checkbox is enabled, files are copied into `destination/hardfi/` instead of `destination/`. The source should already contain subdirectories named `Artist   Album` with numerically-prefixed track files — the tool mirrors this structure directly.
+
+### VinylStudio Export Setup
+
+To export from VinylStudio for use with this tool, configure the export filename format as:
+
+```
+[Album Artist]   [Album Title] / [Track Number] [Track Title]
+```
+
+This produces directories named `Artist   Album` containing files like `01 TrackName.mp3` — exactly what the JB7 and this tool expect.
 
 ## Platform Notes
 
