@@ -2,6 +2,8 @@
 
 A cross-platform GUI application for syncing audio files to a **Brennan JB7** media player.
 
+<img width="892" height="744" alt="Screenshot 2026-05-27 at 14 10 22" src="https://github.com/user-attachments/assets/2463cbf4-d544-42aa-83b9-123ee02be493" />
+
 ## The Problem
 
 The Brennan JB7 media player organises tracks by their filesystem creation timestamp rather than by filename. When copying many files at once (e.g. via drag-and-drop or `rsync`), all files end up with nearly identical timestamps, causing the JB7 to play them in an unpredictable order.
