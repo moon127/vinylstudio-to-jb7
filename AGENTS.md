@@ -7,74 +7,86 @@ Cross-platform Python GUI app that syncs audio files to a Brennan JB7 media play
 ## Architecture
 
 - `main.py` — entry point, calls `App().run()`
-- `vinylstudio_to_jb7/app.py` — tkinter GUI (`App` class), sync orchestration, platform logic wiring
+- `vinylstudio_to_jb7/app.py` — tkinter GUI (`App` class), sync orchestration, platform logic wiring, dialogs
 - `vinylstudio_to_jb7/sync.py` — core copy loop: `has_subdirectories`, `resolve_target`, `sync_directories`, `SyncProgress`
 - `vinylstudio_to_jb7/platform.py` — `dot_clean_available`, `run_dot_clean`, `remove_metadata_files`, `eject_volume`
 - `vinylstudio_to_jb7/metadata.py` — MusicBrainz album metadata lookup, id file generation, track number stripping
 - `tests/test_app.py`, `tests/test_sync.py`, `tests/test_platform.py`, `tests/test_metadata.py`
 
-## Key Design Decisions
+## Decision Log & Design History
 
-### Source handling (resolve_target)
-- If source has **subdirectories** (e.g. `Artist   Album/`), mirror directly into destination
-- If source is **flat** (files only), wrap in `dst/<basename(src)>/`
+### 1. id file format (initial)
+- Lines: `Artist / Album`, Year, Genre, then one track per line
+- VA albums get `Various Artists / Album` header and `Artist / Track` per track
+- Fallback when MusicBrainz fails: year=1970, genre=Unknown, tracks derived from stripped filenames
+- Trailing newline added to avoid `%` in shell display
 
-### Hardfi mode
-- Checkbox "Output in JB7 hardfi format" redirects output to `dst/hardfi/`
-- Source expected to already contain `Artist   Album/01 track.mp3` layout (standard VinylStudio export format: `[Album Artist]   [Album Title] / [Track Number] [Track Title]`)
-- Sub-checkbox "Strip track numbers and generate album.id file" (auto-checked when hardfi is on)
-  - `filename_transform=strip_track_number` passed to `sync_directories` — strips leading digits+space from filenames during copy
-  - After sync completes, `_generate_id_files` iterates album dirs in target, attempts MusicBrainz auto-lookup via `metadata.py`, falls back to `_MusicBrainzSearchDialog` then confirmation dialog, writes `id` file per album
-  - Free of tk var access in background thread (strip_tracks, do_dot_clean passed as args)
-
-### Thread-safe logging
-- Background thread appends to `collections.deque` (`_log_queue`)
-- Main thread polls via `root.after(100, _poll_log_queue)`
-
-### Thread-safe dialogs (directory/file conflicts)
-- `_confirm_dir`/`_confirm_file` set `_dialog_request`, schedule `_process_dialog` via `root.after(0, ...)`, block on `threading.Event`
+### 2. Thread-safe dialog pattern
+- Background thread sets `_dialog_request`, calls `root.after(0, _process_dialog)`, blocks on `threading.Event`
 - Main thread processes dialog, sets `_dialog_result`, signals event
-- Directory conflict: `messagebox.askyesnocancel` (Yes=overwrite, No=skip, Cancel=cancel)
-- File conflict: custom `_OptionDialog` (Skip / Overwrite / Overwrite All / Cancel Sync)
-- Callbacks passed to `sync_directories` as `dir_exists_callback` / `file_exists_callback`
+- Used for: dir conflicts (`messagebox.askyesnocancel`), file conflicts (custom `_OptionDialog`), MusicBrainz dialogs, confirm fallback
+- All tk `Var.get()` calls extracted to thread-start time and passed as parameters — no tk access from worker thread
 
-### Eject
-- Background thread calls `eject_volume(dst)`, stores result
-- Main thread polls `_eject_result` via `root.after(100, _poll_eject_done)`
+### 3. Hardfi mode sub-checkbox
+- "Strip track numbers (if present), generate hardfi id files (MusicBrainz)"
+- Auto-checked when hardfi toggled on; disabled when hardfi off
+- Passes `filename_transform=strip_track_number` to `sync_directories`
+- Post-sync: `_generate_id_files` does MusicBrainz lookup per album dir
 
-### Album id file generation (metadata.py)
-- `metadata.py` uses `musicbrainzngs` to look up album metadata (artist, title, year, genre, tracks)
-- `parse_album_dir(dirname)` splits `"Artist   Album"` into `(artist, album)` on 2+ spaces
-- `strip_track_number(filename)` strips leading `\d+\s` from filenames
-- `search_releases(artist, title)` returns list of candidate dicts with id/title/year/artist
-- Three-stage lookup: (1) exact title match → single = auto-use, multiple → `_ReleaseSelectionDialog`; (2) no exact match → `_MusicBrainzSearchDialog` manual search; (3) user declines → `messagebox.askyesno` fallback; (4) still declines → skip
-- `get_release_metadata(release_id)` fetches full release data from MusicBrainz
-- `_ReleaseSelectionDialog` shows release year/title/artist listbox for multi-match disambiguation
-- Tests: mock `type("L", ..., {"curselection": ...})()` — must instantiate with `()` and the lambda takes parameter `s`
-- `generate_id_file` writes `"\n".join(lines) + "\n"` (trailing newline to avoid `%`)
-- `generate_id_file(album_dir, metadata, stripped_filenames)` writes `id` file with format:
-  - Line 1: `Artist / Album` (or `Various Artists / Album` for VA)
-  - Line 2: Year
-  - Line 3: Genre
-  - Lines 4+: Track titles (one per line, `Artist / Track` for VA)
-- For VA albums (detected via MB per-track artist-credit or directory name), tracks include artist prefix
-- Fallback: year=1970, genre=Unknown, tracks from stripped filename (no extension)
+### 4. Three-stage MusicBrainz lookup chain (added iteratively)
+- **Stage 1** (initial): `lookup_album_metadata` — picks best candidate, if multiple exact-title matches picks first. Problem: silent wrong choice.
+- **Stage 2** (added `_ReleaseSelectionDialog`): When multiple exact-title matches exist (e.g. original 1985 vs remaster 1996), show a selection dialog so user can pick.
+- **Stage 3** (added `_MusicBrainzSearchDialog`): When no exact match exists, let user manually search artists and browse releases.
+- **Stage 4** (fallback): If user declines/cancels all dialogs, ask `messagebox.askyesno` to use fallback metadata. If still declined, skip id file entirely.
 
-### Thread-safe dialogs (MusicBrainz search)
-- Same event-based mechanism as dir/file conflict dialogs
-- `_request_musicbrainz_search(artist, album)` → shows `_MusicBrainzSearchDialog`, returns release_id or None
-- `_request_release_selection(candidates, artist, album)` → shows `_ReleaseSelectionDialog`, returns release_id or None (when multiple exact-title matches exist)
-- `_request_confirm_fallback(artist, album)` → `messagebox.askyesno`, returns bool
+### 5. Candidate dict format evolution
+Initial: `{id, title, year, artist}`
+- Added `format` (e.g. "CD", "Vinyl", "CD/DVD") and `track_count` (total across all mediums) so dialogs can distinguish releases (e.g. CD vs Vinyl of same album)
+- `search_releases()`: extracts medium-list from search API response (included by default)
+- `get_artist_releases()`: needs explicit `includes=["media"]` because `browse_releases` doesn't return `medium-list` without it
+- `_ReleaseSelectionDialog` and `_MusicBrainzSearchDialog` both display `[CD] 12 tracks` suffix
+- Tests construct candidate dicts with minimum fields; `.get()` with defaults handles missing keys gracefully
 
-### macOS metadata cleanup
-- `remove_metadata_files` deletes `.DS_Store`, `._*`, `.localized`, `Thumbs.db`
-- `run_dot_clean` merges remaining Apple Double files
-- Checkbox default ON on macOS, hidden/disabled on other platforms
+### 6. Mock object patterns for tkinter dialogs (key gotchas)
+- `type("L", (), {"curselection": lambda s: (1,)})()` — must call `()` to instantiate (not just create class)
+- The lambda takes `s` (self) because instance lookup produces a bound method that passes self
+- For `_on_ok` tests: mock `self.destroy = lambda: None` to avoid AttributeError on `children`
+- `wait_window` monkeypatch: `lambda self: None`
 
-### Cross-platform eject
-- macOS: `diskutil eject`
-- Linux: `udisksctl unmount` → `eject` (fallback)
-- Windows: PowerShell COM (Shell.Application)
+## Detailed Design: id file generation flow
+
+1. After sync completes, `_generate_id_files(album_dir, progress)` iterates subdirs of target
+2. Skips non-directories, `hardfi/` itself, dirs with existing `id` file
+3. Calls `parse_album_dir(dirname)` to split `"Artist   Album"` into (artist, album) on 2+ spaces
+4. Calls `search_releases(artist, album, limit=10)` → list of dicts with `{id, title, year, artist, format, track_count}`
+5. Filter to exact title matches (case-insensitive):
+   - **0 matches** → `_request_musicbrainz_search(artist, album)` → `_MusicBrainzSearchDialog`:
+     - User types artist name → `search_artists` populates left listbox
+     - Select artist → `get_artist_releases` populates right listbox with `Title (year) [Format] N tracks`
+     - Select release → returns release_id
+     - Cancel → None
+   - **1 match** → auto-use that release_id
+   - **2+ matches** → `_request_release_selection(candidates, ...)` → `_ReleaseSelectionDialog`:
+     - Listbox shows `Title (year) [Format] N tracks`
+     - "Use Selected" returns release_id, "Search Manually" returns None
+6. If release_id obtained → `get_release_metadata(release_id)` → `AlbumMetadata`
+7. If release_id is None:
+   - `_request_confirm_fallback(artist, album)` → `messagebox.askyesno`
+   - True → create `AlbumMetadata(artist, album, year="1970", genre="Unknown")` with tracks from filenames
+   - False → skip this album
+8. Calls `get_track_files(album_dir)` for stripped filenames
+9. Calls `generate_id_file(album_dir, metadata, stripped_filenames)` → writes `id` file
+10. Uses `SyncProgress.cancelled` checks throughout for responsive cancellation
+
+## Thread-safe dialog APIs
+
+| Method | Dialog | Returns |
+|---|---|---|
+| `_request_musicbrainz_search(artist, album)` | `_MusicBrainzSearchDialog` | `release_id \| None` |
+| `_request_release_selection(candidates, artist, album)` | `_ReleaseSelectionDialog` | `release_id \| None` |
+| `_request_confirm_fallback(artist, album)` | `messagebox.askyesno` | `bool` |
+| `_confirm_dir(dir_path)` | `messagebox.askyesnocancel` | `True`=overwrite, `False`=skip, `None`=cancel |
+| `_confirm_file(filename)` | `_OptionDialog` | `str`: "skip", "overwrite", "overwrite_all", "cancel" |
 
 ## Testing
 
@@ -83,12 +95,13 @@ make test          # pytest + coverage (threshold 90%)
 make test-html     # HTML coverage report
 ```
 
-- Tests mock tkinter (typical for headless/CI). App fixture creates `App()` with `root.withdraw()`.
-- For testing threaded dialog methods (`_confirm_dir`, `_confirm_file`), monkeypatch `app.root.after` to call the callback synchronously: `monkeypatch.setattr(app.root, "after", lambda ms, fn, *a: fn(*a))`
-- Test dialog `_OptionDialog` by mocking `wait_window` and testing `_done` directly
-- Test `_MusicBrainzSearchDialog` by mocking `wait_window` and `_do_search`
-- Test `_request_musicbrainz_search` / `_request_confirm_fallback` by monkeypatching the dialog class / messagebox and the `after` method
-- `metadata.py` functions that hit MusicBrainz API should monkeypatch the `musicbrainzngs` module functions with `*args, **kwargs` signatures
+- Tests mock tkinter (headless/CI). App fixture creates `App()` with `root.withdraw()`.
+- Threaded dialog tests: `monkeypatch.setattr(app.root, "after", lambda ms, fn, *a: fn(*a))` to run synchronously
+- `_OptionDialog` tests: mock `wait_window`, test `_done` directly
+- `_MusicBrainzSearchDialog` tests: mock `wait_window` and `_do_search`
+- `_ReleaseSelectionDialog` tests: use `__new__` + mock `destroy`, or mock `wait_window` for constructor
+- MusicBrainz API functions: monkeypatch `musicbrainzngs` module functions with `**kwargs` signatures
+- Mock candidate dicts: only need `id`; other fields use `.get()` defaults
 
 ## Conventions
 
@@ -97,3 +110,4 @@ make test-html     # HTML coverage report
 - `SyncProgress.cancelled` checked frequently in loops for responsive cancellation
 - `make venv` creates venv and installs pytest/pytest-cov and musicbrainzngs
 - Source must be Python 3.10+ compatible
+- No comments in code unless essential
