@@ -2,7 +2,9 @@
 
 A cross-platform GUI application for syncing audio files to a **Brennan JB7** media player.
 
-<img width="892" height="744" alt="Screenshot 2026-05-27 at 14 10 22" src="https://github.com/user-attachments/assets/2463cbf4-d544-42aa-83b9-123ee02be493" />
+<img width="892" height="744" alt="Screenshot 2026-05-28 at 11 27 24" src="https://github.com/user-attachments/assets/dd0bef98-5c54-42e4-bb0f-345e3b885288" />
+<img width="848" height="700" alt="Screenshot 2026-05-28 at 11 27 44" src="https://github.com/user-attachments/assets/6752ef62-13be-4946-8391-c5ef30a27bb9" />
+<img width="848" height="700" alt="Screenshot 2026-05-28 at 11 28 15" src="https://github.com/user-attachments/assets/23a8097f-a612-415c-8166-906233146bbd" />
 
 ## The Problem
 
