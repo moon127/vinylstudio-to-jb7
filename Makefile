@@ -11,7 +11,7 @@ venv: $(VENV_DIR)/bin/activate
 $(VENV_DIR)/bin/activate: requirements.txt
 	$(PYTHON) -m venv $(VENV_DIR)
 	$(PIP) install --upgrade pip
-	$(PIP) install pytest pytest-cov
+	$(PIP) install pytest pytest-cov musicbrainzngs
 	touch $(VENV_DIR)/bin/activate
 
 test: venv

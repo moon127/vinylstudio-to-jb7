@@ -1,4 +1,6 @@
 # vinylstudio-to-jb7
-# No external dependencies required - uses Python stdlib (tkinter, shutil, os, etc.)
+# Core functionality uses Python stdlib (tkinter, shutil, os, etc.)
+# musicbrainzngs is optional — album metadata lookup for id file generation
+musicbrainzngs
 # To package as a standalone app, optionally install:
 # pyinstaller

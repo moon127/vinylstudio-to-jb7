@@ -37,6 +37,7 @@ def sync_directories(
     log_callback: callable,
     dir_exists_callback: callable | None = None,
     file_exists_callback: callable | None = None,
+    filename_transform: callable | None = None,
 ) -> bool:
     if not os.path.isdir(src):
         log_callback(f"ERROR: Source directory does not exist: {src}")
@@ -103,13 +104,14 @@ def sync_directories(
                 log_callback("Sync cancelled by user")
                 return False
 
+            dest_filename = filename_transform(filename) if filename_transform else filename
             src_file = os.path.join(dirpath, filename)
-            dst_file = os.path.join(target_dir, filename)
+            dst_file = os.path.join(target_dir, dest_filename)
 
             if os.path.exists(dst_file) and file_exists_callback and rel_path not in overwrite_all_dirs:
-                action = file_exists_callback(rel_path, filename)
+                action = file_exists_callback(rel_path, dest_filename)
                 if action == "skip":
-                    log_callback(f"[{copied_files + 1}/{total_files}] Skipped: {filename}")
+                    log_callback(f"[{copied_files + 1}/{total_files}] Skipped: {dest_filename}")
                     continue
                 elif action == "overwrite_all":
                     overwrite_all_dirs.add(rel_path)
@@ -121,7 +123,7 @@ def sync_directories(
             try:
                 shutil.copy2(src_file, dst_file)
                 copied_files += 1
-                log_callback(f"[{copied_files}/{total_files}] Copied: {filename}")
+                log_callback(f"[{copied_files}/{total_files}] Copied: {dest_filename}")
 
                 if pause_seconds > 0 and copied_files < total_files:
                     _sleep_with_cancel(pause_seconds, progress)

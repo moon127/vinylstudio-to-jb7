@@ -492,6 +492,62 @@ class TestSyncDirectoriesFileExistsCallback:
                 assert any("Skipped" in l for l in logs)
 
 
+class TestSyncDirectoriesFilenameTransform:
+    def test_transform_applied(self):
+        with tempfile.TemporaryDirectory() as src:
+            with tempfile.TemporaryDirectory() as dst:
+                with open(os.path.join(src, "001a.mp3"), "w") as f:
+                    f.write("x")
+                with open(os.path.join(src, "002b.mp3"), "w") as f:
+                    f.write("x")
+
+                logs = []
+                p = SyncProgress()
+                result = sync_directories(
+                    src, dst, 0, p, logs.append,
+                    filename_transform=lambda n: n[3:] if n[:3].isdigit() else n,
+                )
+                target = os.path.join(dst, os.path.basename(os.path.normpath(src)))
+                assert result is True
+                assert os.path.exists(os.path.join(target, "a.mp3"))
+                assert os.path.exists(os.path.join(target, "b.mp3"))
+                assert not os.path.exists(os.path.join(target, "001a.mp3"))
+
+    def test_transform_logged_name(self):
+        with tempfile.TemporaryDirectory() as src:
+            with tempfile.TemporaryDirectory() as dst:
+                with open(os.path.join(src, "001x.mp3"), "w") as f:
+                    f.write("x")
+
+                logs = []
+                p = SyncProgress()
+                sync_directories(
+                    src, dst, 0, p, logs.append,
+                    filename_transform=lambda n: n[3:],
+                )
+                assert any("Copied: x.mp3" in l for l in logs)
+                assert not any("Copied: 001" in l for l in logs)
+
+    def test_file_exists_uses_transformed_name(self):
+        with tempfile.TemporaryDirectory() as src:
+            with tempfile.TemporaryDirectory() as dst:
+                with open(os.path.join(src, "001x.mp3"), "w") as f:
+                    f.write("new")
+                os.makedirs(os.path.join(dst, os.path.basename(os.path.normpath(src))))
+                with open(os.path.join(dst, os.path.basename(os.path.normpath(src)), "x.mp3"), "w") as f:
+                    f.write("old")
+
+                calls = []
+                p = SyncProgress()
+                sync_directories(
+                    src, dst, 0, p, lambda m: None,
+                    file_exists_callback=lambda p, n: calls.append(n) or "overwrite",
+                    filename_transform=lambda n: n[3:],
+                )
+                assert "x.mp3" in calls
+                assert "001x.mp3" not in calls
+
+
 class TestSleepWithCancel:
     def test_sleep_completes(self):
         p = SyncProgress()

@@ -4,7 +4,7 @@ import tkinter as tk
 
 import pytest
 
-from vinylstudio_to_jb7.app import App, _OptionDialog
+from vinylstudio_to_jb7.app import App, _MusicBrainzSearchDialog, _OptionDialog, _ReleaseSelectionDialog
 from vinylstudio_to_jb7.platform import IS_MAC
 
 
@@ -29,6 +29,26 @@ class TestAppInit:
 
     def test_hardfi_default_off(self, app):
         assert app.hardfi_var.get() is False
+
+    def test_strip_tracks_default_off(self, app):
+        assert app.strip_tracks_var.get() is False
+
+    def test_strip_tracks_disabled_by_default(self, app):
+        assert str(app.strip_tracks_cb.cget("state")) == "disabled"
+
+    def test_hardfi_toggle_enables_strip_tracks(self, app):
+        app.hardfi_var.set(True)
+        app._on_hardfi_toggle()
+        assert app.strip_tracks_var.get() is True
+        assert str(app.strip_tracks_cb.cget("state")) == "normal"
+
+    def test_hardfi_untoggle_disables_strip_tracks(self, app):
+        app.hardfi_var.set(True)
+        app._on_hardfi_toggle()
+        app.hardfi_var.set(False)
+        app._on_hardfi_toggle()
+        assert app.strip_tracks_var.get() is False
+        assert str(app.strip_tracks_cb.cget("state")) == "disabled"
 
 class TestApplyPlatformOptions:
     def test_dot_clean_disabled_on_non_mac(self, monkeypatch):
@@ -172,6 +192,74 @@ class TestOptionDialog:
         assert dlg.result is None
 
 
+class TestMusicBrainzSearchDialog:
+    def test_constructor_creates_widgets(self, app, monkeypatch):
+        monkeypatch.setattr(
+            "vinylstudio_to_jb7.app._MusicBrainzSearchDialog.wait_window",
+            lambda self: None,
+        )
+        monkeypatch.setattr(
+            "vinylstudio_to_jb7.app._MusicBrainzSearchDialog._do_search",
+            lambda self: None,
+        )
+        dlg = _MusicBrainzSearchDialog(app.root, "Dido", "Life For Rent")
+        assert dlg.title() == "MusicBrainz Lookup"
+        assert dlg.result is None
+
+    def test_on_cancel_sets_none(self):
+        dlg = _MusicBrainzSearchDialog.__new__(_MusicBrainzSearchDialog)
+        dlg.result = "something"
+        destroyed = []
+        dlg.destroy = lambda: destroyed.append(True)
+        dlg._on_cancel()
+        assert dlg.result is None
+        assert destroyed == [True]
+
+    def test_on_ok_no_selection_does_nothing(self):
+        dlg = _MusicBrainzSearchDialog.__new__(_MusicBrainzSearchDialog)
+        dlg.result = None
+        dlg._album_listbox = type("L", (), {"curselection": lambda s: []})()
+        dlg._album_data = []
+        dlg._on_ok()
+        assert dlg.result is None
+
+
+class TestReleaseSelectionDialog:
+    def test_on_cancel_sets_none(self):
+        dlg = _ReleaseSelectionDialog.__new__(_ReleaseSelectionDialog)
+        dlg.result = "something"
+        destroyed = []
+        dlg.destroy = lambda: destroyed.append(True)
+        dlg._on_cancel()
+        assert dlg.result is None
+        assert destroyed == [True]
+
+    def test_on_ok_sets_result(self):
+        dlg = _ReleaseSelectionDialog.__new__(_ReleaseSelectionDialog)
+        dlg.result = None
+        dlg._candidates = [
+            {"id": "1", "title": "Original", "year": "1985", "artist": "Artist"},
+            {"id": "2", "title": "Remaster", "year": "1996", "artist": "Artist"},
+        ]
+        dlg._release_listbox = type("L", (), {"curselection": lambda s: (1,)})()
+        destroyed = []
+        dlg.destroy = lambda: destroyed.append(True)
+        dlg._on_ok()
+        assert dlg.result == "2"
+        assert destroyed == [True]
+
+    def test_on_ok_no_selection_does_nothing(self):
+        dlg = _ReleaseSelectionDialog.__new__(_ReleaseSelectionDialog)
+        dlg.result = None
+        dlg._candidates = []
+        dlg._release_listbox = type("L", (), {"curselection": lambda s: ()})()
+        destroyed = []
+        dlg.destroy = lambda: destroyed.append(True)
+        dlg._on_ok()
+        assert dlg.result is None
+        assert destroyed == []
+
+
 class TestConfirmDir:
     def test_overwrite(self, app, monkeypatch):
         monkeypatch.setattr(
@@ -230,6 +318,54 @@ class TestConfirmFile:
         )
         monkeypatch.setattr(app.root, "after", lambda ms, fn, *a: fn(*a))
         assert app._confirm_file("Album", "t.mp3") == "cancel"
+
+
+class TestMusicBrainzRequestMethods:
+    def test_request_musicbrainz_search(self, app, monkeypatch):
+        monkeypatch.setattr(
+            "vinylstudio_to_jb7.app._MusicBrainzSearchDialog",
+            lambda parent, artist, album: type("D", (), {"result": "release-123"})(),
+        )
+        monkeypatch.setattr(app.root, "after", lambda ms, fn, *a: fn(*a))
+        result = app._request_musicbrainz_search("Dido", "Life For Rent")
+        assert result == "release-123"
+
+    def test_request_musicbrainz_search_none(self, app, monkeypatch):
+        monkeypatch.setattr(
+            "vinylstudio_to_jb7.app._MusicBrainzSearchDialog",
+            lambda parent, artist, album: type("D", (), {"result": None})(),
+        )
+        monkeypatch.setattr(app.root, "after", lambda ms, fn, *a: fn(*a))
+        result = app._request_musicbrainz_search("Dido", "Life For Rent")
+        assert result is None
+
+    def test_request_confirm_fallback_yes(self, app, monkeypatch):
+        monkeypatch.setattr(
+            "vinylstudio_to_jb7.app.messagebox.askyesno", lambda t, m: True
+        )
+        monkeypatch.setattr(app.root, "after", lambda ms, fn, *a: fn(*a))
+        result = app._request_confirm_fallback("Dido", "Life For Rent")
+        assert result is True
+
+    def test_request_confirm_fallback_no(self, app, monkeypatch):
+        monkeypatch.setattr(
+            "vinylstudio_to_jb7.app.messagebox.askyesno", lambda t, m: False
+        )
+        monkeypatch.setattr(app.root, "after", lambda ms, fn, *a: fn(*a))
+        result = app._request_confirm_fallback("Dido", "Life For Rent")
+        assert result is False
+
+
+class TestReleaseSelectionRequest:
+    def test_request_release_selection(self, app, monkeypatch):
+        monkeypatch.setattr(
+            "vinylstudio_to_jb7.app._ReleaseSelectionDialog",
+            lambda parent, candidates, artist, album: type("D", (), {"result": "release-456"})(),
+        )
+        monkeypatch.setattr(app.root, "after", lambda ms, fn, *a: fn(*a))
+        candidates = [{"id": "release-456", "title": "Brothers in Arms", "year": "1985", "artist": "Dire Straits"}]
+        result = app._request_release_selection(candidates, "Dire Straits", "Brothers in Arms")
+        assert result == "release-456"
 
 
 class TestSetUiEnabled:
@@ -374,7 +510,7 @@ class TestSyncWorker:
         app.dot_clean_var.set(False)
         app.sync_progress = SyncProgress()
 
-        app._sync_worker(str(src), str(dst), 0, app.sync_progress)
+        app._sync_worker(str(src), str(dst), 0, app.sync_progress, strip_tracks=False, do_dot_clean=False)
 
         assert app._sync_result is True
         target = os.path.join(str(dst), "src")
@@ -408,7 +544,7 @@ class TestSyncWorker:
         app.dot_clean_var.set(True)
         app.sync_progress = SyncProgress()
 
-        app._sync_worker(str(src), str(dst), 0, app.sync_progress)
+        app._sync_worker(str(src), str(dst), 0, app.sync_progress, strip_tracks=False, do_dot_clean=True)
         assert app._sync_result is True
 
     def test_sync_worker_hardfi(self, app, tmp_path):
@@ -427,10 +563,202 @@ class TestSyncWorker:
         app.sync_progress = SyncProgress()
         hardfi_dir = os.path.join(str(dst), "hardfi")
 
-        app._sync_worker(str(src), str(dst), 0, app.sync_progress, hardfi_dir)
+        app._sync_worker(str(src), str(dst), 0, app.sync_progress, hardfi_dir, strip_tracks=False, do_dot_clean=False)
         assert app._sync_result is True
         assert os.path.exists(os.path.join(hardfi_dir, "Artist   Album", "01 a.mp3"))
         assert os.path.exists(os.path.join(hardfi_dir, "Artist   Album", "02 b.mp3"))
+
+
+class TestGenerateIdFiles:
+    def test_generates_id_files_for_albums(self, app, tmp_path, monkeypatch):
+        album_dir = tmp_path / "Dido   Life For Rent"
+        album_dir.mkdir()
+        (album_dir / "01 White Flag.mp3").write_text("x")
+        (album_dir / "02 Stoned.mp3").write_text("x")
+
+        monkeypatch.setattr(
+            "vinylstudio_to_jb7.app.search_releases",
+            lambda a, t: [{"id": "abc", "title": "Life For Rent", "year": "2003", "artist": "Dido"}],
+        )
+        monkeypatch.setattr(
+            "vinylstudio_to_jb7.app.get_release_metadata",
+            lambda rid: type("M", (), {
+                "artist": "Dido", "title": "Life For Rent", "year": "2003",
+                "genre": "Alternative Rock", "tracks": ["White Flag", "Stoned"],
+                "is_various": False,
+            })(),
+        )
+        monkeypatch.setattr(app.root, "after", lambda ms, fn, *a: fn(*a))
+
+        from vinylstudio_to_jb7.sync import SyncProgress
+        app._generate_id_files(str(tmp_path), SyncProgress())
+
+        id_file = album_dir / "id"
+        assert id_file.exists()
+        content = id_file.read_text()
+        assert "Dido / Life For Rent" in content
+        assert "White Flag" in content
+        assert "Stoned" in content
+
+    def test_skip_when_user_declines_fallback(self, app, tmp_path, monkeypatch):
+        album_dir = tmp_path / "Unknown   Album"
+        album_dir.mkdir()
+        (album_dir / "01 track.mp3").write_text("x")
+
+        monkeypatch.setattr(
+            "vinylstudio_to_jb7.app.search_releases", lambda a, t: []
+        )
+        monkeypatch.setattr(
+            "vinylstudio_to_jb7.app._MusicBrainzSearchDialog",
+            lambda parent, artist, album: type("D", (), {"result": None})(),
+        )
+        monkeypatch.setattr(
+            "vinylstudio_to_jb7.app.messagebox.askyesno", lambda t, m: False
+        )
+        monkeypatch.setattr(app.root, "after", lambda ms, fn, *a: fn(*a))
+
+        from vinylstudio_to_jb7.sync import SyncProgress
+        app._generate_id_files(str(tmp_path), SyncProgress())
+
+        id_file = album_dir / "id"
+        assert not id_file.exists()
+
+    def test_uses_fallback_when_confirmed(self, app, tmp_path, monkeypatch):
+        album_dir = tmp_path / "Unknown   Album"
+        album_dir.mkdir()
+        (album_dir / "01 track.mp3").write_text("x")
+
+        monkeypatch.setattr(
+            "vinylstudio_to_jb7.app.search_releases", lambda a, t: []
+        )
+        monkeypatch.setattr(
+            "vinylstudio_to_jb7.app._MusicBrainzSearchDialog",
+            lambda parent, artist, album: type("D", (), {"result": None})(),
+        )
+        monkeypatch.setattr(
+            "vinylstudio_to_jb7.app.messagebox.askyesno", lambda t, m: True
+        )
+        monkeypatch.setattr(app.root, "after", lambda ms, fn, *a: fn(*a))
+
+        from vinylstudio_to_jb7.sync import SyncProgress
+        app._generate_id_files(str(tmp_path), SyncProgress())
+
+        id_file = album_dir / "id"
+        assert id_file.exists()
+        content = id_file.read_text()
+        assert "Unknown / Album" in content
+        assert "1970" in content
+        assert "Unknown" in content
+
+
+    def test_selects_from_multiple_exact_matches(self, app, tmp_path, monkeypatch):
+        album_dir = tmp_path / "Dire Straits   Brothers in Arms"
+        album_dir.mkdir()
+        (album_dir / "01 So Far Away.mp3").write_text("x")
+
+        candidates = [
+            {"id": "orig", "title": "Brothers in Arms", "year": "1985", "artist": "Dire Straits"},
+            {"id": "remaster", "title": "Brothers in Arms", "year": "1996", "artist": "Dire Straits"},
+        ]
+        monkeypatch.setattr(
+            "vinylstudio_to_jb7.app.search_releases", lambda a, t: candidates
+        )
+        monkeypatch.setattr(
+            "vinylstudio_to_jb7.app._ReleaseSelectionDialog",
+            lambda parent, candidates, artist, album: type("D", (), {"result": "orig"})(),
+        )
+        monkeypatch.setattr(
+            "vinylstudio_to_jb7.app.get_release_metadata",
+            lambda rid: type("M", (), {
+                "artist": "Dire Straits", "title": "Brothers in Arms", "year": "1985",
+                "genre": "Rock", "tracks": ["So Far Away"], "is_various": False,
+            })(),
+        )
+        monkeypatch.setattr(app.root, "after", lambda ms, fn, *a: fn(*a))
+
+        from vinylstudio_to_jb7.sync import SyncProgress
+        app._generate_id_files(str(tmp_path), SyncProgress())
+
+        id_file = album_dir / "id"
+        assert id_file.exists()
+        content = id_file.read_text()
+        assert "1985" in content
+        assert "1996" not in content
+
+    def test_multiple_matches_user_cancels_opens_manual(self, app, tmp_path, monkeypatch):
+        album_dir = tmp_path / "Dire Straits   Brothers in Arms"
+        album_dir.mkdir()
+        (album_dir / "01 track.mp3").write_text("x")
+
+        candidates = [
+            {"id": "orig", "title": "Brothers in Arms", "year": "1985", "artist": "Dire Straits"},
+            {"id": "remaster", "title": "Brothers in Arms", "year": "1996", "artist": "Dire Straits"},
+        ]
+        monkeypatch.setattr(
+            "vinylstudio_to_jb7.app.search_releases", lambda a, t: candidates
+        )
+        monkeypatch.setattr(
+            "vinylstudio_to_jb7.app._ReleaseSelectionDialog",
+            lambda parent, c, a, album: type("D", (), {"result": None})(),
+        )
+        monkeypatch.setattr(
+            "vinylstudio_to_jb7.app._MusicBrainzSearchDialog",
+            lambda parent, artist, album: type("D", (), {"result": "remaster"})(),
+        )
+        monkeypatch.setattr(
+            "vinylstudio_to_jb7.app.get_release_metadata",
+            lambda rid: type("M", (), {
+                "artist": "Dire Straits", "title": "Brothers in Arms", "year": "1996",
+                "genre": "Rock", "tracks": ["track"], "is_various": False,
+            })(),
+        )
+        monkeypatch.setattr(app.root, "after", lambda ms, fn, *a: fn(*a))
+
+        from vinylstudio_to_jb7.sync import SyncProgress
+        app._generate_id_files(str(tmp_path), SyncProgress())
+
+        id_file = album_dir / "id"
+        assert id_file.exists()
+        assert "1996" in id_file.read_text()
+
+    def test_no_exact_match_opens_manual_search(self, app, tmp_path, monkeypatch):
+        album_dir = tmp_path / "Dire Straits   Brothers"
+        album_dir.mkdir()
+        (album_dir / "01 track.mp3").write_text("x")
+
+        monkeypatch.setattr(
+            "vinylstudio_to_jb7.app.search_releases",
+            lambda a, t: [{"id": "abc", "title": "Brothers in Arms", "year": "1985", "artist": "Dire Straits"}],
+        )
+        monkeypatch.setattr(
+            "vinylstudio_to_jb7.app._MusicBrainzSearchDialog",
+            lambda parent, artist, album: type("D", (), {"result": "abc"})(),
+        )
+        monkeypatch.setattr(
+            "vinylstudio_to_jb7.app.get_release_metadata",
+            lambda rid: type("M", (), {
+                "artist": "Dire Straits", "title": "Brothers in Arms", "year": "1985",
+                "genre": "Rock", "tracks": ["track"], "is_various": False,
+            })(),
+        )
+        monkeypatch.setattr(app.root, "after", lambda ms, fn, *a: fn(*a))
+
+        from vinylstudio_to_jb7.sync import SyncProgress
+        app._generate_id_files(str(tmp_path), SyncProgress())
+
+        id_file = album_dir / "id"
+        assert id_file.exists()
+        assert "1985" in id_file.read_text()
+
+    def test_release_selection_constructor(self, app, monkeypatch):
+        monkeypatch.setattr(
+            "vinylstudio_to_jb7.app._ReleaseSelectionDialog.wait_window",
+            lambda self: None,
+        )
+        candidates = [{"id": "1", "title": "Album", "year": "2000", "artist": "Artist"}]
+        dlg = _ReleaseSelectionDialog(app.root, candidates, "Artist", "Album")
+        assert dlg.title() == "Select Release"
+        assert dlg.result is None
 
 
 class TestCheckSyncDone:
