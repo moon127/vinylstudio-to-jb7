@@ -346,6 +346,13 @@ class App:
         if self.hardfi_var.get():
             self.strip_tracks_var.set(True)
             self.strip_tracks_cb.configure(state=tk.NORMAL)
+            messagebox.showinfo(
+                "JB7 Hardfi Format",
+                "The destination directory must be the 'hardfi/music' folder on your JB7 media.\n\n"
+                "Make sure this folder already exists (the JB7 player creates it automatically\n"
+                "when you insert the SD card or USB drive).\n\n"
+                "Browse and select 'hardfi/music' as the Destination Directory before syncing."
+            )
         else:
             self.strip_tracks_var.set(False)
             self.strip_tracks_cb.configure(state=tk.DISABLED)
@@ -500,10 +507,21 @@ class App:
             messagebox.showerror("Error", "Pause must be a non-negative number")
             return
 
-        hardfi_dir = os.path.join(dst, "hardfi") if self.hardfi_var.get() else None
+        if self.hardfi_var.get():
+            expected_suffix = os.path.join("hardfi", "music")
+            if not dst.rstrip(os.sep).endswith(expected_suffix):
+                messagebox.showerror(
+                    "Error",
+                    "When hardfi format is enabled, the destination directory must be the\n"
+                    "'hardfi/music' folder on your JB7 media.\n\n"
+                    "Please browse and select 'hardfi/music' as the Destination Directory."
+                )
+                return
 
         self._log(f"Starting sync: {src} -> {dst}")
         self._log(f"Pause between files: {pause}s" if pause > 0 else "No pause between files")
+        if self.hardfi_var.get():
+            self._log("Hardfi format enabled")
         self._set_ui_enabled(False)
         self.status_var.set("Syncing...")
 
@@ -511,7 +529,7 @@ class App:
         self.sync_thread = threading.Thread(
             target=self._sync_worker,
             args=(
-                src, dst, pause, self.sync_progress, hardfi_dir,
+                src, dst, pause, self.sync_progress,
                 self.strip_tracks_var.get(), self.dot_clean_var.get(),
             ),
             daemon=True,
@@ -519,11 +537,8 @@ class App:
         self.sync_thread.start()
         self.root.after(100, self._check_sync_done)
 
-    def _sync_worker(self, src: str, dst: str, pause: float, progress: SyncProgress, hardfi_dir: str | None = None, strip_tracks: bool = False, do_dot_clean: bool = True):
-        target = hardfi_dir or dst
-        if hardfi_dir:
-            os.makedirs(hardfi_dir, exist_ok=True)
-            self._log(f"Hardfi format enabled, output to: {hardfi_dir}")
+    def _sync_worker(self, src: str, dst: str, pause: float, progress: SyncProgress, strip_tracks: bool = False, do_dot_clean: bool = True):
+        target = dst
 
         filename_transform = strip_track_number if strip_tracks else None
 

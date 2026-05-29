@@ -36,13 +36,15 @@ class TestAppInit:
     def test_strip_tracks_disabled_by_default(self, app):
         assert str(app.strip_tracks_cb.cget("state")) == "disabled"
 
-    def test_hardfi_toggle_enables_strip_tracks(self, app):
+    def test_hardfi_toggle_enables_strip_tracks(self, app, monkeypatch):
+        monkeypatch.setattr("tkinter.messagebox.showinfo", lambda *a, **kw: None)
         app.hardfi_var.set(True)
         app._on_hardfi_toggle()
         assert app.strip_tracks_var.get() is True
         assert str(app.strip_tracks_cb.cget("state")) == "normal"
 
-    def test_hardfi_untoggle_disables_strip_tracks(self, app):
+    def test_hardfi_untoggle_disables_strip_tracks(self, app, monkeypatch):
+        monkeypatch.setattr("tkinter.messagebox.showinfo", lambda *a, **kw: None)
         app.hardfi_var.set(True)
         app._on_hardfi_toggle()
         app.hardfi_var.set(False)
@@ -444,6 +446,24 @@ class TestStartSync:
         app._cancel_sync()
         app.sync_thread.join(timeout=5)
 
+    def test_hardfi_rejects_non_hardfi_music_dst(self, app, tmp_path):
+        app.hardfi_var.set(True)
+        app.src_var.set(str(tmp_path / "src"))
+        app.dst_var.set(str(tmp_path / "some_other_dir"))
+        app._start_sync()
+        assert app.sync_thread is None
+
+    def test_hardfi_accepts_hardfi_music_dst(self, app, tmp_path):
+        app.hardfi_var.set(True)
+        app.src_var.set(str(tmp_path / "src"))
+        hardfi_music = tmp_path / "hardfi" / "music"
+        hardfi_music.mkdir(parents=True)
+        app.dst_var.set(str(hardfi_music))
+        app._start_sync()
+        assert app.sync_thread is not None
+        app._cancel_sync()
+        app.sync_thread.join(timeout=5)
+
 class TestCancelSync:
     def test_cancel_no_progress(self, app):
         app._cancel_sync()
@@ -549,9 +569,9 @@ class TestSyncWorker:
 
     def test_sync_worker_hardfi(self, app, tmp_path):
         src = tmp_path / "src"
-        dst = tmp_path / "dst"
+        hardfi_music = tmp_path / "hardfi" / "music"
+        hardfi_music.mkdir(parents=True)
         src.mkdir()
-        dst.mkdir()
         album = src / "Artist   Album"
         album.mkdir()
         (album / "01 a.mp3").write_text("x")
@@ -561,12 +581,11 @@ class TestSyncWorker:
 
         app.dot_clean_var.set(False)
         app.sync_progress = SyncProgress()
-        hardfi_dir = os.path.join(str(dst), "hardfi")
 
-        app._sync_worker(str(src), str(dst), 0, app.sync_progress, hardfi_dir, strip_tracks=False, do_dot_clean=False)
+        app._sync_worker(str(src), str(hardfi_music), 0, app.sync_progress, strip_tracks=False, do_dot_clean=False)
         assert app._sync_result is True
-        assert os.path.exists(os.path.join(hardfi_dir, "Artist   Album", "01 a.mp3"))
-        assert os.path.exists(os.path.join(hardfi_dir, "Artist   Album", "02 b.mp3"))
+        assert os.path.exists(os.path.join(str(hardfi_music), "Artist   Album", "01 a.mp3"))
+        assert os.path.exists(os.path.join(str(hardfi_music), "Artist   Album", "02 b.mp3"))
 
 
 class TestGenerateIdFiles:
